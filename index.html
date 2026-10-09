@@ -21,6 +21,8 @@
         --danger-cell: #3a1412;
         --crash: #8a2be2;
         --crash-cell: #26103a;
+        --guard: #2fb6c0;
+        --guard-cell: #0e2e33;
         --empty: #222b3e;
         font-synthesis: none;
       }
@@ -169,6 +171,10 @@
         color: #06101f;
         font-weight: 600;
       }
+      .toggle.guard button.on {
+        background: var(--guard);
+        color: #06101f;
+      }
 
       /* Code */
       pre.code {
@@ -190,6 +196,9 @@
       }
       pre.code .fn {
         color: #7cc0ff;
+      }
+      pre.code .guard {
+        color: #52c7d1;
       }
       pre.code .hl {
         background: rgba(224, 81, 74, 0.22);
@@ -243,11 +252,11 @@
         align-items: center;
         justify-content: center;
         font-family: Menlo, monospace;
-        font-size: 0.82rem;
+        font-size: 0.8rem;
         background: var(--empty);
         border: 1px solid transparent;
         color: var(--muted);
-        transition: all 0.12s;
+        transition: all 0.1s;
       }
       .cell.safe {
         background: var(--safe-cell);
@@ -269,9 +278,25 @@
         border-color: var(--crash);
         color: #d6aef2;
       }
+      .cell.canary {
+        background: var(--guard-cell);
+        border-color: var(--guard);
+        color: #8fe4ec;
+        font-size: 0.68rem;
+      }
+      .cell.just-written {
+        transform: scale(1.14);
+        box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.14);
+      }
 
       .region.r-buffer {
         border-left: 3px solid var(--safe);
+      }
+      .region.r-canary {
+        border-left: 3px solid var(--guard);
+      }
+      .region.r-canary.hit {
+        border-left: 3px solid var(--danger);
       }
       .region.r-sfp.hit {
         border-left: 3px solid var(--warn);
@@ -337,6 +362,10 @@
         background: var(--crash-cell);
         border-color: var(--crash);
       }
+      .verdict.guard {
+        background: var(--guard-cell);
+        border-color: var(--guard);
+      }
       .verdict b {
         display: block;
         margin-bottom: 3px;
@@ -382,9 +411,9 @@
         <p>
           A safe, interactive teaching tool. Type input into a fixed-size stack
           buffer and watch what happens when it exceeds the buffer's capacity
-          and spills into the saved frame pointer and the return address. No
-          real exploit, shellcode, or attack payload — just the memory layout,
-          so the concept is easier to see.
+          and spills into the saved frame pointer and the return address — then
+          turn on a stack canary and watch the same overflow get caught. No real
+          exploit or payload, just the memory layout.
         </p>
       </header>
 
@@ -435,7 +464,17 @@
             </div>
 
             <div class="row">
-              <label class="field">Presets</label>
+              <label class="field">Stack protection</label>
+              <div class="toggle guard" id="canary">
+                <button data-canary="off" class="on">Canary off</button>
+                <button data-canary="on">Stack canary on</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <label class="field"
+                >Presets (these play the animated fill)</label
+              >
               <div class="btns">
                 <button class="ghost" data-preset="fit">Fits exactly</button>
                 <button class="ghost" data-preset="sfp">
@@ -451,7 +490,9 @@
             </div>
 
             <div class="btns">
-              <button class="primary" id="writeBtn">Copy input → buffer</button>
+              <button class="primary" id="writeBtn">
+                ▶ Copy input → buffer
+              </button>
               <button id="resetBtn">Reset</button>
             </div>
           </div>
@@ -463,9 +504,10 @@
               style="color: var(--muted); font-size: 0.82rem; margin: 12px 0 0"
             >
               <code class="mono">strcpy</code> copies until it hits a null byte
-              in the source — it never checks the destination's size. If the
-              input is longer than the buffer, the extra bytes keep writing into
-              whatever sits next on the stack.
+              in the source — it never checks the destination's size. A stack
+              canary doesn't stop the overwrite; it places a known guard value
+              in front of the saved registers and checks it on return, aborting
+              if it changed.
             </p>
           </div>
         </div>
@@ -490,6 +532,16 @@
                   "
                 ></span>
                 inside buffer</span
+              >
+              <span
+                ><span
+                  class="swatch"
+                  style="
+                    background: var(--guard-cell);
+                    border-color: var(--guard);
+                  "
+                ></span>
+                stack canary</span
               >
               <span
                 ><span
@@ -554,11 +606,12 @@
 
     <footer>
       <b>Educational use only.</b> This tool illustrates <i>why</i> unchecked
-      copies are dangerous and <i>how</i> a fixed-width buffer sits next to
-      critical control data on the stack. It does not generate shellcode,
-      payloads, or any real attack. The fix is shown live: switch the copy
-      function to <code class="mono">strncpy()</code> and the overflow
-      disappears.
+      copies are dangerous, <i>how</i> a fixed-width buffer sits next to
+      critical control data on the stack, and <i>how</i> two defenses respond:
+      bounding the copy with <code class="mono">strncpy()</code> prevents the
+      overflow outright, while a <code class="mono">stack canary</code> detects
+      it and aborts before the corrupted return address is ever used. It does
+      not generate shellcode, payloads, or any real attack.
     </footer>
 
     <script>
@@ -566,13 +619,21 @@
         'use strict';
 
         // --- Stack frame model (a simplified 32-bit frame) ---
+        const CANARY_SIZE = 4; // guard value inserted between buffer and saved registers
         const SFP_SIZE = 4; // saved frame pointer (saved EBP)
         const RET_SIZE = 4; // saved return address (saved EIP)
-        const BEYOND_SIZE = 4; // caller's frame / red zone we render to show a crash
-        const BASE_ADDR = 0xffffcd00; // buffer base (lowest address shown); addresses increase upward
+        const BEYOND_SIZE = 4; // caller's frame we render to show a crash
+        const BASE_ADDR = 0xffffcd00;
+        const CANARY_BYTES = ['00', 'e3', 'a7', '5b']; // display-only guard value (note the null byte)
 
         // --- State ---
-        const state = { input: '', bufferSize: 8, mode: 'unsafe' };
+        const state = {
+          input: '',
+          bufferSize: 8,
+          mode: 'unsafe',
+          canary: false,
+        };
+        let animTimer = null;
 
         // --- Elements ---
         const el = {
@@ -590,37 +651,64 @@
           sRet: document.getElementById('sRet'),
           verdict: document.getElementById('verdict'),
           modeWrap: document.getElementById('mode'),
+          canaryWrap: document.getElementById('canary'),
         };
 
         const hex = (n) => '0x' + (n >>> 0).toString(16).padStart(8, '0');
         const displayChar = (ch) => {
           if (ch === undefined) return '.';
           const c = ch.charCodeAt(0);
-          if (c < 32 || c > 126) return '·'; // non-printable
+          if (c < 32 || c > 126) return '·';
           return ch;
         };
 
-        // How many bytes actually get written, given the model and mode.
-        function bytesWritten() {
+        // Regions from LOW address (buffer) to HIGH (beyond).
+        function regions() {
           const cap = state.bufferSize;
-          const total = cap + SFP_SIZE + RET_SIZE + BEYOND_SIZE;
-          const srcLen = state.input.length; // conceptually strcpy also writes a null terminator; we keep it simple
-          if (state.mode === 'safe') {
-            // strncpy(buffer, input, sizeof buffer): never writes past the buffer
-            return Math.min(srcLen, cap);
-          }
-          // unsafe strcpy: writes the whole input, capped at what we render
-          return Math.min(srcLen, total);
+          const r = [
+            { key: 'buffer', name: 'char buffer[' + cap + ']', size: cap },
+          ];
+          if (state.canary)
+            r.push({
+              key: 'canary',
+              name: 'stack canary (guard value)',
+              size: CANARY_SIZE,
+            });
+          r.push({
+            key: 'sfp',
+            name: 'saved frame pointer (EBP)',
+            size: SFP_SIZE,
+          });
+          r.push({
+            key: 'ret',
+            name: 'saved return address (EIP)',
+            size: RET_SIZE,
+          });
+          r.push({
+            key: 'beyond',
+            name: "caller's frame →",
+            size: BEYOND_SIZE,
+          });
+          let start = 0;
+          r.forEach((x) => {
+            x.start = start;
+            start += x.size;
+          });
+          return r;
+        }
+        function totalCells() {
+          const r = regions();
+          const last = r[r.length - 1];
+          return last.start + last.size;
         }
 
-        // Region of a byte index (0 = first/lowest byte of buffer)
-        function regionOf(i) {
+        function bytesWritten() {
           const cap = state.bufferSize;
-          if (i < cap) return 'buffer';
-          if (i < cap + SFP_SIZE) return 'sfp';
-          if (i < cap + SFP_SIZE + RET_SIZE) return 'ret';
-          return 'beyond';
+          const srcLen = state.input.length;
+          if (state.mode === 'safe') return Math.min(srcLen, cap); // strncpy bounded to buffer
+          return Math.min(srcLen, totalCells()); // unsafe strcpy, capped at what we render
         }
+
         const cellClass = {
           buffer: 'safe',
           sfp: 'warn',
@@ -628,29 +716,14 @@
           beyond: 'crash',
         };
 
-        function render() {
+        // draw the diagram + status for a given number of visible bytes
+        function draw(shown, lastByteIdx) {
           const cap = state.bufferSize;
-          const written = bytesWritten();
-
-          // Build regions from LOW address (buffer) to HIGH (beyond), then render top-down reversed.
-          const regions = [
-            { key: 'buffer', name: 'char buffer[' + cap + ']', size: cap },
-            { key: 'sfp', name: 'saved frame pointer (EBP)', size: SFP_SIZE },
-            { key: 'ret', name: 'saved return address (EIP)', size: RET_SIZE },
-            { key: 'beyond', name: "caller's frame →", size: BEYOND_SIZE },
-          ];
-
-          // compute starting byte index for each region
-          let start = 0;
-          regions.forEach((r) => {
-            r.start = start;
-            start += r.size;
-          });
+          const regs = regions();
 
           el.stack.innerHTML = '';
-          // render high address (last region) first
-          [...regions].reverse().forEach((r) => {
-            const hitCount = Math.max(0, Math.min(r.size, written - r.start));
+          [...regs].reverse().forEach((r) => {
+            const hitCount = Math.max(0, Math.min(r.size, shown - r.start));
             const hit = r.key !== 'buffer' && hitCount > 0;
 
             const band = document.createElement('div');
@@ -658,7 +731,6 @@
 
             const addr = document.createElement('div');
             addr.className = 'addr';
-            // address of the region's highest byte start (just a label)
             addr.textContent = hex(BASE_ADDR + r.start);
 
             const region = document.createElement('div');
@@ -669,14 +741,14 @@
             const left = document.createElement('span');
             left.textContent = r.name;
             const right = document.createElement('span');
-            right.textContent =
-              r.key === 'buffer'
-                ? written > 0
-                  ? Math.min(written, cap) + '/' + cap + ' filled'
-                  : 'empty'
-                : hit
-                  ? 'OVERWRITTEN'
-                  : '';
+            if (r.key === 'buffer')
+              right.textContent =
+                shown > 0
+                  ? Math.min(shown, cap) + '/' + cap + ' filled'
+                  : 'empty';
+            else if (r.key === 'canary')
+              right.textContent = hit ? 'GUARD DESTROYED' : 'intact';
+            else right.textContent = hit ? 'OVERWRITTEN' : '';
             rlabel.append(left, right);
 
             const cells = document.createElement('div');
@@ -685,9 +757,15 @@
               const idx = r.start + j;
               const c = document.createElement('div');
               c.className = 'cell';
-              if (idx < written) {
-                c.classList.add(cellClass[regionOf(idx)]);
+              if (idx < shown) {
+                c.classList.add(
+                  r.key === 'canary' ? 'danger' : cellClass[r.key],
+                );
                 c.textContent = displayChar(state.input[idx]);
+                if (idx === lastByteIdx) c.classList.add('just-written');
+              } else if (r.key === 'canary') {
+                c.classList.add('canary');
+                c.textContent = CANARY_BYTES[j] || '··';
               } else {
                 c.textContent = '·';
               }
@@ -699,16 +777,21 @@
             el.stack.appendChild(band);
           });
 
-          updateStatus(written, cap);
+          updateStatus(shown, cap);
         }
 
-        function updateStatus(written, cap) {
-          const overflow = Math.max(0, written - cap);
-          const sfpHit = written > cap;
-          const retHit = written > cap + SFP_SIZE;
-          const beyondHit = written > cap + SFP_SIZE + RET_SIZE;
+        function updateStatus(shown, cap) {
+          const overflow = Math.max(0, shown - cap);
+          const canaryOn = state.canary;
+          const canaryHit = canaryOn && shown > cap;
+          const sfpStart = canaryOn ? cap + CANARY_SIZE : cap;
+          const retStart = sfpStart + SFP_SIZE;
+          const beyondStart = retStart + RET_SIZE;
+          const sfpHit = shown > sfpStart;
+          const retHit = shown > retStart;
+          const beyondHit = shown > beyondStart;
 
-          el.sWritten.textContent = written + ' B';
+          el.sWritten.textContent = shown + ' B';
           el.sCap.textContent = cap + ' B';
           el.sOver.textContent = overflow + ' B';
           el.sRet.textContent = retHit ? 'overwritten' : 'intact';
@@ -717,7 +800,7 @@
           let cls = 'ok',
             title = '',
             body = '';
-          if (written === 0) {
+          if (shown === 0) {
             cls = 'ok';
             title = 'Buffer empty';
             body = 'Type something and copy it in to begin.';
@@ -725,15 +808,32 @@
             cls = 'ok';
             title = 'Safe copy — bounded';
             body =
-              "strncpy() stopped at the buffer's capacity, so the frame pointer and return address are untouched. " +
-              'This is the fix: always bound the copy to the destination size.';
-          } else if (!sfpHit) {
+              "strncpy() stopped at the buffer's capacity, so nothing past the buffer is touched. Bounding the copy " +
+              'to the destination size is the root fix — it prevents the overflow instead of just catching it.';
+          } else if (overflow === 0) {
             cls = 'ok';
-            title = 'Fits inside the buffer';
+            title =
+              shown === cap
+                ? 'Exactly fills the buffer'
+                : 'Fits inside the buffer';
             body =
-              overflow === 0 && written === cap
-                ? 'The input exactly fills the buffer. One more byte and it starts corrupting the saved frame pointer.'
+              shown === cap
+                ? 'One more byte and the overflow begins — into the ' +
+                  (canaryOn ? 'canary.' : 'saved frame pointer.')
                 : 'The input fits with room to spare. Nothing adjacent is touched yet.';
+          } else if (canaryOn) {
+            // With a canary, any overflow corrupts the guard, so the return is aborted regardless.
+            cls = 'guard';
+            title = 'Stack canary tripped — program aborted safely';
+            body =
+              'The overflow changed the guard value. On return the function checks it, sees it no longer matches, and ' +
+              'calls __stack_chk_fail() — the process aborts (' +
+              '"stack smashing detected"' +
+              ') ' +
+              (retHit
+                ? 'before the overwritten return address is ever used. '
+                : 'before returning. ') +
+              "The corruption still happened, but control flow was never hijacked. That's the whole point of the canary.";
           } else if (sfpHit && !retHit) {
             cls = 'warn';
             title = 'Overflow — saved frame pointer corrupted';
@@ -745,15 +845,14 @@
             cls = 'danger';
             title = 'Return address overwritten — control flow hijacked';
             body =
-              'The copy reached the saved return address. When this function executes its `ret`, the CPU will ' +
-              'jump to whatever bytes landed here instead of the real caller. In a real attack those bytes would ' +
-              'be chosen deliberately; here we only show that the address is no longer trustworthy.';
+              'The copy reached the saved return address. When this function runs its `ret`, the CPU jumps to whatever ' +
+              'bytes landed here instead of the real caller. Turn the stack canary on and run the same input to see ' +
+              'this caught. (We only show the address is untrustworthy — no real payload is built.)';
           } else {
             cls = 'crash';
             title = 'Frame smashed — likely crash (SIGSEGV)';
             body =
-              "The write ran past the entire frame into the caller's memory. On a real system this typically " +
-              'faults, and with stack canaries enabled it would be detected and the program aborted before return.';
+              "The write ran past the entire frame into the caller's memory. On a real system this typically faults.";
           }
           el.verdict.className = 'verdict ' + cls;
           el.verdict.innerHTML = '<b>' + title + '</b>' + body;
@@ -765,11 +864,43 @@
           const copyLine = unsafe
             ? '    <span class="hl"><span class="fn">strcpy</span>(buffer, input);</span>   <span class="cmt">// no bounds check — overflows!</span>'
             : '    <span class="fn">strncpy</span>(buffer, input, <span class="kw">sizeof</span> buffer);  <span class="cmt">// bounded — safe</span>';
+          const canarySet = state.canary
+            ? '\n    <span class="kw">long</span> __canary = __stack_chk_guard;  <span class="guard">// [compiler inserted]</span>'
+            : '';
+          const canaryChk = state.canary
+            ? '\n    <span class="guard">if</span> (__canary != __stack_chk_guard)  <span class="guard">// [compiler inserted]</span>\n        __stack_chk_fail();            <span class="guard">// abort before return</span>'
+            : '';
           el.code.innerHTML = `<span class="kw">void</span> <span class="fn">vulnerable</span>(<span class="kw">const char</span> *input) {
-    <span class="kw">char</span> buffer[${cap}];      <span class="cmt">// fixed-size stack buffer</span>
-${copyLine}
+    <span class="kw">char</span> buffer[${cap}];      <span class="cmt">// fixed-size stack buffer</span>${canarySet}
+${copyLine}${canaryChk}
     <span class="cmt">// ... function returns via saved return address ...</span>
 }`;
+        }
+
+        // --- Rendering wrappers ---
+        function stopAnim() {
+          if (animTimer) {
+            clearInterval(animTimer);
+            animTimer = null;
+          }
+        }
+        function render() {
+          stopAnim();
+          draw(bytesWritten(), -1);
+        } // instant (typing, slider, toggles)
+
+        function animateFill() {
+          stopAnim();
+          const target = bytesWritten();
+          draw(0, -1);
+          if (target === 0) return;
+          let n = 0;
+          const step = Math.max(28, Math.round(900 / target)); // whole fill ~0.9s, min 28ms/byte
+          animTimer = setInterval(() => {
+            n++;
+            draw(n, n - 1);
+            if (n >= target) stopAnim();
+          }, step);
         }
 
         // --- Events ---
@@ -797,7 +928,18 @@ ${copyLine}
           render();
         });
 
-        el.writeBtn.addEventListener('click', () => render());
+        el.canaryWrap.addEventListener('click', (e) => {
+          const b = e.target.closest('button');
+          if (!b) return;
+          state.canary = b.dataset.canary === 'on';
+          [...el.canaryWrap.children].forEach((x) =>
+            x.classList.toggle('on', x === b),
+          );
+          renderCode();
+          render();
+        });
+
+        el.writeBtn.addEventListener('click', () => animateFill());
         el.resetBtn.addEventListener('click', () => {
           state.input = '';
           el.inp.value = '';
@@ -807,30 +949,30 @@ ${copyLine}
         document.querySelectorAll('[data-preset]').forEach((btn) => {
           btn.addEventListener('click', () => {
             const cap = state.bufferSize;
+            const base = cap + (state.canary ? CANARY_SIZE : 0);
             let len;
             switch (btn.dataset.preset) {
               case 'fit':
                 len = cap;
                 break;
               case 'sfp':
-                len = cap + 2;
+                len = base + 2;
                 break;
               case 'ret':
-                len = cap + SFP_SIZE + 2;
+                len = base + SFP_SIZE + 2;
                 break;
               case 'crash':
-                len = cap + SFP_SIZE + RET_SIZE + BEYOND_SIZE;
+                len = base + SFP_SIZE + RET_SIZE + BEYOND_SIZE;
                 break;
               default:
                 len = cap;
             }
-            // Build a readable pattern: AAAA...BBBB.. so boundaries are visible
             const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
             let s = '';
             for (let i = 0; i < len; i++) s += letters[Math.floor(i / 4) % 26];
             state.input = s;
             el.inp.value = s;
-            render();
+            animateFill();
           });
         });
 
