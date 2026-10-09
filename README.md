@@ -71,10 +71,10 @@ Built as a class assignment on AI-assisted development of a security teaching mo
 
 **Team**
 
-- Rogelio Alvarado-Diaz
-- Lukas Hessling
-- Ambrose Schnaufer
-- Marlin Crisp
+- Rogelio Alvarado-Diaz (rogelioa@iastate.edu)
+- Lukas Hessling (lukashes@iastate.edu)
+- Ambrose Schnaufer (aschn@iastate.edu)
+- Marlin Crisp (marcrisp@iastate.edu)
 
 ## License
 
