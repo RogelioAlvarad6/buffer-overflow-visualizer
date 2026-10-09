@@ -1,23 +1,23 @@
 ## The topic
 
 We chose to visualize a **stack-based buffer overflow** because it's the example from class
-that's easiest to _say_ and hardest to actually _picture_. Everyone can repeat "the input
-overwrites the return address," but it wasn't until we had to lay out the stack frame —
+that's easiest to say and hardest to actually visualize. Everyone can repeat "the input
+overwrites the return address," but it wasn't until we had to lay out the stack frame,
 buffer at the low addresses, then the saved frame pointer, then the saved return address
-just above it — that the mechanism really clicked. Building the model forced us to answer
-questions we'd been hand-waving: which direction the copy writes, why the return address is
-the prize, and why exactly `strcpy()` is the villain (it keys off a null terminator in the
-_source_ and never looks at the _destination's_ size).
+just above it, that the visual mechanism really came together. Building the visual made us to answer
+questions we'd been struggling to grasp, which direction the copy writes, why the return address is
+the prize, and why exactly `strcpy()` is the not good (b/c it keys off a null terminator in the
+source and never looks at the destination's size).
 
 ## How building it deepened our understanding
 
 Writing the byte-by-byte logic was the part that taught us the most. To color each cell
 correctly we had to compute, for any input length and buffer size, which region each written
-byte falls into. That made the boundaries concrete in a way reading about them never did —
+byte falls into. That made the boundaries concrete in a way reading about them never did,
 you can see that it takes exactly `bufferSize + 1` bytes to begin corrupting the saved frame
 pointer, and `bufferSize + 5` to reach the return address in our simplified 32-bit frame.
-Adding the `strncpy()` toggle was almost an afterthought, but it turned the tool from "here's
-the scary thing" into "here's the scary thing _and_ the one-line fix," which is the point the
+Adding the `strncpy()` toggle was almost overlooked, but it turned the tool from "here's
+the scary thing" into "here's the scary thing and the one-line fix," which is the point the
 class was really making about bounded copies.
 
 ## The AI-assisted workflow
