@@ -36,7 +36,7 @@ We used an AI assistant (Claude) as a pair-programmer rather than a code vending
 4. **Kept the safety line clear.** We deliberately steered away from anything resembling a
    real exploit — no shellcode, no payload construction — so the output stays an educational
    model.
-5. **Had the AI draft the README and this reflection**, then edited them to match what we
+5. **Had the AI draft the README**, then edited them to match what we
    actually did.
    The biggest lesson about the workflow itself: AI is fastest when you already know what
    "correct" looks like. The code it wrote was only trustworthy because we understood the stack
